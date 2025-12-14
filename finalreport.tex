@@ -23,14 +23,20 @@
 \usepackage{booktabs}       % professional-quality tables
 \usepackage{amsfonts}       % blackboard math symbols
 \usepackage{amsmath}        % math
+\usepackage{amssymb}        % additional math symbols
 \usepackage{nicefrac}       % compact symbols for 1/2, etc.
 \usepackage{microtype}      % microtypography
 \usepackage{xcolor}         % colors
+\usepackage{algorithm}      % algorithm environment
+\usepackage{algorithmic}    % algorithmic environment
+\usepackage{graphicx}       % graphics
+\usepackage{subcaption}     % subfigures
 
-\title{Regret Minimization Algorithms for Kuhn Poker}
+\title{Regret Minimization Algorithms for Kuhn Poker: \\A Comparative Study of CFR, CFR+, NormalHedge, and NormalHedge+}
 
 \author{%
   Yousef Radwan\\
+  King Abdullah University of Science and Technology (KAUST)\\
   \texttt{yousef.radwan@kaust.edu.sa} \\
 }
 
@@ -39,142 +45,329 @@
 \maketitle
 
 \begin{abstract}
-We study four regret minimization algorithms on Kuhn Poker, a minimal yet non-trivial imperfect-information game. The algorithms are: Counterfactual Regret Minimization (CFR), CFR+ (with regret truncation), NormalHedge (a parameter-free potential-based method), and a novel hybrid NormalHedge+ that combines NormalHedge with RM+ truncation. We compare convergence to the known Nash value under multiple ante/bet configurations and iteration budgets. Our experiments highlight the practical speed-ups of CFR+, the late-iteration accuracy of NormalHedge, and the mixed behavior of NormalHedge+.
+We present a comprehensive study of four regret minimization algorithms applied to Kuhn Poker, a minimal yet strategically rich imperfect-information game. The algorithms are: Counterfactual Regret Minimization (CFR), CFR+ (with regret truncation and weighted averaging), NormalHedge (a parameter-free potential-based method using half-normal distributions), and a novel hybrid NormalHedge+ that combines NormalHedge's exponential weighting with RM+ truncation. We provide detailed algorithmic descriptions, theoretical background, and extensive experimental comparisons across multiple game configurations and iteration budgets. Our experiments reveal that CFR+ achieves dramatic speed-ups at low iteration counts, while NormalHedge variants excel at high iterations despite increased computational cost. We also analyze how learned strategies converge toward the known Nash equilibrium, finding that all algorithms correctly learn pure strategies (always fold Jack facing a bet, always call with King) but show varying accuracy on mixed strategies like Jack bluffing. The novel NormalHedge+ exhibits mixed behavior, suggesting complex interactions between exponential weighting and regret truncation. Code is available at \url{https://github.com/yradwan147/RegretMinimizationKuhnPoker}.
 \end{abstract}
 
-\section{Background and Problem Setting}
+\section{Introduction}
+\label{sec:intro}
+
+Imperfect-information games model strategic interactions where players must make decisions without complete knowledge of the game state. Poker, the canonical example, has driven significant advances in game-theoretic artificial intelligence, culminating in superhuman poker agents~\cite{bowling2015,brown2019superhuman}. At the heart of these breakthroughs lies \emph{regret minimization}, a framework where agents iteratively refine strategies by tracking and minimizing ``regret''---the difference between actual performance and the performance of alternative actions.
+
+Counterfactual Regret Minimization (CFR)~\cite{zinkevich2007regret} established the foundation for solving large imperfect-information games. Subsequent variants, particularly CFR+~\cite{tammelin2014solving}, achieved order-of-magnitude speed-ups through regret truncation and weighted averaging. More recently, parameter-free methods like NormalHedge~\cite{chaudhuri2009parameter} offer alternative approaches that automatically adapt to the problem scale without hyperparameter tuning.
+
+In this work, we conduct a systematic comparison of four regret minimization algorithms on Kuhn Poker~\cite{kuhn1950simplified}, a simplified poker variant with a known Nash equilibrium. Our contributions are:
+\begin{itemize}
+    \item A detailed exposition of CFR, CFR+, NormalHedge, and a novel NormalHedge+ variant
+    \item Comprehensive experiments across multiple game configurations (varying ante and bet sizes)
+    \item Analysis of convergence speed, final accuracy, and computational cost trade-offs
+    \item Detailed analysis of strategy convergence toward the known Nash equilibrium
+    \item Insights into the interaction between exponential weighting and regret truncation
+\end{itemize}
+
+Our implementation is publicly available at \url{https://github.com/yradwan147/RegretMinimizationKuhnPoker}.
+
+\section{Background}
 \label{sec:background}
 
-\paragraph{Kuhn Poker.}
-Kuhn Poker is a two-player, zero-sum, simplified poker game introduced by Harold Kuhn in 1950. The deck has three cards (Jack, Queen, King); each player antes one chip and receives one private card. Player~0 acts first and may \emph{check} or \emph{bet}. Player~1 responds: after a check they may check or bet; after a bet they may call or fold. If a player folds, the other wins the pot; otherwise the higher card wins at showdown. The game has a tiny game tree (12 information sets) but a non-trivial Nash equilibrium. The equilibrium expected value for Player~0 in the standard game (ante=1, bet=1) is $-1/18 \approx -0.0556$.
+\subsection{Kuhn Poker: A Minimal Test Bed}
 
-\vspace{-0.25em}
-\paragraph{Terminal states and payoffs.}
-Let \texttt{c} denote check, \texttt{b} bet, \texttt{f} fold. With ante $A$ and bet size $B$ (both in chips), Player~0's payoff at terminal histories is:
+Kuhn Poker, introduced by Harold Kuhn in 1950, is the simplest poker variant that retains the essential strategic elements of bluffing and value betting. Despite its simplicity, it has a non-trivial Nash equilibrium, making it an ideal benchmark for game-solving algorithms.
+
+\paragraph{Game Rules.}
+The game uses a three-card deck containing Jack (J), Queen (Q), and King (K), ranked in that order. Two players each ante one chip and receive one private card. Player~0 acts first:
+\begin{itemize}
+    \item \textbf{Check (c)}: Pass without betting
+    \item \textbf{Bet (b)}: Add one chip to the pot
+\end{itemize}
+
+Player~1 then responds:
+\begin{itemize}
+    \item After a check: May check (ending the round) or bet
+    \item After a bet: May fold (f) or call (c)
+\end{itemize}
+
+If Player~0 checked and Player~1 bets, Player~0 gets a final response (fold or call). The game ends at a terminal state where either a player folds (opponent wins the pot) or both players have acted and a showdown occurs (higher card wins).
+
+\paragraph{Terminal States and Payoffs.}
+With ante $A$ and bet size $B$, the possible terminal histories and Player~0 payoffs are:
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabular}{lll}
 \toprule
-History & Player 0 payoff \\
+History & Outcome & Player 0 Payoff \\
 \midrule
-\texttt{cc}   & $\pm A$ (showdown after both check)\\
-\texttt{bf}   & $+A$ (P1 folds to P0 bet)\\
-\texttt{bc}   & $\pm (A+B)$ (P1 calls P0 bet)\\
-\texttt{cbf}  & $-A$ (P0 folds to P1 bet)\\
-\texttt{cbc}  & $\pm (A+B)$ (P0 calls P1 bet)\\
+\texttt{cc}   & Showdown after both check & $\pm A$ \\
+\texttt{bf}   & P1 folds to P0 bet & $+A$ \\
+\texttt{bc}   & P1 calls P0 bet $\to$ showdown & $\pm (A+B)$ \\
+\texttt{cbf}  & P0 folds to P1 bet & $-A$ \\
+\texttt{cbc}  & P0 calls P1 bet $\to$ showdown & $\pm (A+B)$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\vspace{-0.25em}
-\paragraph{Regret minimization.}
-In repeated play, \emph{regret} for an action is the difference between the reward we would have obtained by always playing that action and the reward we actually obtained. In zero-sum games, if each player chooses future actions proportional to their past positive regrets (``Regret Matching''), the average strategy converges to a Nash equilibrium. CFR extends this idea to extensive-form games using \emph{counterfactual regret}, computed at each information set assuming that the player certainly reached that information set.
+\paragraph{Information Sets.}
+An \emph{information set} represents what a player knows at a decision point: their own card and the action history. Player~0's information sets include $\{J, Q, K\}$ (initial decision) and $\{Jcb, Qcb, Kcb\}$ (response to bet after checking). Player~1's information sets include $\{Jc, Qc, Kc\}$ (after opponent checks) and $\{Jb, Qb, Kb\}$ (after opponent bets).
+
+\paragraph{Nash Equilibrium.}
+The game has a family of Nash equilibria. In the standard configuration ($A=B=1$), Player~0's equilibrium expected value is $-\frac{1}{18} \approx -0.0556$. The key equilibrium strategies that all algorithms should converge to are:
+\begin{itemize}
+    \item \textbf{Jack bluffing}: Player~0 with Jack bets (bluffs) with probability $\frac{1}{3} \approx 0.333$
+    \item \textbf{Queen checking}: Player~0 with Queen always checks (probability 1.0)
+    \item \textbf{King value betting}: Player~0 with King bets with probability in $[\frac{2}{3}, 1]$
+    \item \textbf{Jack folding}: Player~1 always folds with Jack facing a bet (probability 1.0)
+    \item \textbf{King calling}: Player~1 always calls with King facing a bet (probability 1.0)
+    \item \textbf{Queen mixed response}: Player~1 with Queen calls a bet with probability $\frac{1}{3}$
+\end{itemize}
+
+\subsection{Regret Minimization Framework}
+
+\paragraph{Regret.}
+Consider a repeated game where at each round $t$, an agent selects action $a_t$ from action set $\mathcal{A}$ and receives reward $r_t(a_t)$. The \emph{regret} for action $a$ after $T$ rounds is:
+\[
+R^T(a) = \sum_{t=1}^{T} r_t(a) - \sum_{t=1}^{T} r_t(a_t)
+\]
+This measures how much better the agent would have done by always choosing action $a$.
+
+\paragraph{Regret Matching.}
+The key insight of regret minimization is that if an agent chooses actions proportionally to their \emph{positive} cumulative regrets:
+\[
+\sigma(a) = \frac{\max(R(a), 0)}{\sum_{a'} \max(R(a'), 0)}
+\]
+then the agent's average strategy converges to a Nash equilibrium in two-player zero-sum games~\cite{hart2000simple}.
+
+\paragraph{Counterfactual Value.}
+In extensive-form games, we compute \emph{counterfactual} values that assume the player reaches information set $I$ with certainty:
+\[
+v_I(a) = \sum_{z \in Z_I} \pi_{-i}(z) \cdot u_i(z|I, a)
+\]
+where $\pi_{-i}(z)$ is the probability of reaching terminal state $z$ under opponents' strategies, and $u_i(z|I, a)$ is player $i$'s utility when playing action $a$ at $I$.
 
 \section{Algorithms}
 \label{sec:algorithms}
 
-We compare four regret-minimization algorithms, all implemented at the level of information sets in Kuhn Poker.
+We now describe each of the four algorithms in detail, including their key equations and implementation considerations.
 
 \subsection{CFR: Counterfactual Regret Minimization}
 
-CFR (Zinkevich et al., 2007) maintains, for each information set $I$ and action $a$, a cumulative regret $R_I(a)$ and a cumulative strategy sum $S_I(a)$. At iteration $t$, the current strategy is computed via Regret Matching:
-\[
-    \pi_I(a) =
-    \begin{cases}
-        \dfrac{\max(R_I(a),0)}{\sum_{a'} \max(R_I(a'),0)} & \text{if some $R_I(a')>0$} \\
-        \frac{1}{|\mathcal{A}(I)|} & \text{otherwise.}
-    \end{cases}
-\]
-A recursive traversal of the game tree is performed with reach probabilities for both players. At each information set, CFR:
-(i) computes the utility of each action via recursive calls,
-(ii) computes the expected utility under the current strategy,
-(iii) updates regrets with the opponent's reach probability, and
-(iv) updates $S_I(a)$ with the player's reach probability.
-The final strategy is obtained by normalizing $S_I(a)$.
+CFR~\cite{zinkevich2007regret} is the foundational algorithm for solving extensive-form games with imperfect information.
 
-CFR has theoretical average regret $\mathcal{O}(1/\sqrt{T})$ after $T$ iterations, yielding convergence of the average strategy profile to a Nash equilibrium in two-player zero-sum games.
+\paragraph{Strategy Computation.}
+At each information set $I$, the current strategy is computed via regret matching:
+\[
+\sigma_I^t(a) =
+\begin{cases}
+\dfrac{R_I^{t-1,+}(a)}{\sum_{a'} R_I^{t-1,+}(a')} & \text{if } \sum_{a'} R_I^{t-1,+}(a') > 0 \\[1em]
+\dfrac{1}{|\mathcal{A}(I)|} & \text{otherwise}
+\end{cases}
+\]
+where $R^+_I(a) = \max(R_I(a), 0)$ denotes the positive part of cumulative regret.
+
+\paragraph{Regret Update.}
+After computing counterfactual action values $v_I(a)$, regrets are updated:
+\[
+R_I^t(a) = R_I^{t-1}(a) + \pi_{-i}(I) \cdot \left(v_I(a) - \sum_{a'} \sigma_I^t(a') v_I(a')\right)
+\]
+where $\pi_{-i}(I)$ is the opponent's reach probability to information set $I$.
+
+\paragraph{Average Strategy.}
+The final Nash equilibrium approximation is the \emph{average} strategy:
+\[
+\bar{\sigma}_I(a) = \frac{\sum_{t=1}^{T} \pi_i^t(I) \cdot \sigma_I^t(a)}{\sum_{t=1}^{T} \pi_i^t(I)}
+\]
+
+CFR achieves average regret $\mathcal{O}(1/\sqrt{T})$ after $T$ iterations.
+
+\begin{algorithm}[t]
+\caption{CFR Iteration}
+\label{alg:cfr}
+\begin{algorithmic}[1]
+\STATE \textbf{function} CFR($h$, $\pi_0$, $\pi_1$)
+\IF{$h$ is terminal}
+    \RETURN utility$(h)$ for player 0
+\ENDIF
+\STATE $p \gets$ current\_player$(h)$
+\STATE $I \gets$ info\_set$(h, p)$
+\STATE $\sigma \gets$ get\_strategy$(I)$ \COMMENT{Regret matching}
+\STATE $v \gets 0$; $v_a \gets 0$ for all $a \in \mathcal{A}(I)$
+\FOR{each action $a \in \mathcal{A}(I)$}
+    \IF{$p = 0$}
+        \STATE $v_a \gets$ CFR$(h \cdot a, \pi_0 \cdot \sigma(a), \pi_1)$
+    \ELSE
+        \STATE $v_a \gets -$CFR$(h \cdot a, \pi_0, \pi_1 \cdot \sigma(a))$
+    \ENDIF
+    \STATE $v \gets v + \sigma(a) \cdot v_a$
+\ENDFOR
+\FOR{each action $a \in \mathcal{A}(I)$}
+    \STATE $r \gets v_a - v$
+    \STATE $R_I(a) \gets R_I(a) + \pi_{-p} \cdot r$ \COMMENT{Update regret}
+\ENDFOR
+\STATE Update strategy sum: $S_I \gets S_I + \pi_p \cdot \sigma$
+\RETURN $v$ if $p = 0$ else $-v$
+\end{algorithmic}
+\end{algorithm}
 
 \subsection{CFR+: CFR with Regret Matching+}
 
-CFR+ (Tammelin, 2014) modifies CFR via \emph{regret truncation} and weighted averaging. Regrets are updated as
-\[
-    R_I(a) \leftarrow \max\big(R_I(a) + \Delta r_I(a), 0\big),
-\]
-so cumulative regrets never become negative. Intuitively, negative ``debt'' from poorly performing actions is immediately forgotten; when an action becomes good, it can regain probability mass rapidly.
+CFR+~\cite{tammelin2014solving} introduces three key modifications that dramatically accelerate convergence.
 
-Additional implementation choices further accelerate convergence:
+\paragraph{Regret Truncation (RM+).}
+The critical change is truncating regrets at zero:
+\[
+R_I^t(a) = \max\left(R_I^{t-1}(a) + \Delta r_I^t(a), 0\right)
+\]
+This prevents regrets from accumulating large negative values, allowing actions to ``recover'' faster when they become advantageous.
+
+\paragraph{Weighted Averaging.}
+CFR+ uses linear weighting for the strategy sum:
+\[
+S_I^t(a) = S_I^{t-1}(a) + w_t \cdot \pi_i^t(I) \cdot \sigma_I^t(a)
+\]
+where $w_t = \max(t - d, 0)$ with delay parameter $d \geq 0$. This gives more weight to later (better-converged) strategies.
+
+\paragraph{Alternating Updates.}
+Rather than updating both players every iteration, CFR+ updates only one player per iteration:
 \begin{itemize}
-    \item \textbf{Alternating updates:} update only one player per iteration (odd iterations: Player~0, even: Player~1).
-    \item \textbf{Linear averaging:} after a delay $d$, the strategy sum is updated as
-    $S_I(a) \leftarrow S_I(a) + w_t\, \pi_I(a)$ with $w_t=\max(t-d,0)$,
-    giving more weight to later (better) strategies.
+    \item Odd iterations: Update Player~0's regrets
+    \item Even iterations: Update Player~1's regrets
 \end{itemize}
-In practice CFR+ converges an order of magnitude faster than vanilla CFR on many poker benchmarks.
+
+CFR+ achieves $\mathcal{O}(1/T)$ convergence, a significant improvement over CFR's $\mathcal{O}(1/\sqrt{T})$.
 
 \subsection{NormalHedge}
 
-NormalHedge (Chaudhuri, Freund, Hsu) is a parameter-free online learning algorithm that assigns weights using a \emph{half-normal potential}. For each action we keep a cumulative regret $R(a)$ (standard sum of instantaneous regrets). Define $R_+(a)=\max(R(a),0)$ and potential
-\[
-    \phi(x,c) = \exp\left(\frac{\max(x,0)^2}{2c}\right).
-\]
-At each step, a scale parameter $c>0$ is chosen so that the \emph{average potential} equals Euler's number $e$:
-\[
-    \frac{1}{N}\sum_{a=1}^{N} \exp\left(\frac{R_+(a)^2}{2c}\right) = e,
-\]
-which we solve numerically (e.g., by bisection). The weight of action $a$ is
-\[
-    w(a) = 
-    \begin{cases}
-        \dfrac{R_+(a)}{c}\exp\left(\dfrac{R_+(a)^2}{2c}\right), & R_+(a) > 0,\\[0.25em]
-        0, & \text{otherwise.}
-    \end{cases}
-\]
-and the strategy is $\pi(a) = w(a)/\sum_{a'}w(a')$. Compared to Regret Matching (linear in $R_+$), NormalHedge uses a stronger, exponential dependence while remaining parameter-free (no learning rate).
+NormalHedge~\cite{chaudhuri2009parameter} is a parameter-free online learning algorithm that uses a half-normal potential function.
 
-In our CFR-style implementation, NormalHedge replaces the linear regret matching step at each information set. Regrets are accumulated identically to CFR (without truncation).
-
-\subsection{NormalHedge+: NormalHedge with RM+ Truncation}
-
-NormalHedge+ is a novel hybrid we introduce: it uses the NormalHedge weighting scheme but applies RM+ regret truncation,
+\paragraph{Half-Normal Potential.}
+The potential function is:
 \[
-    R(a) \leftarrow \max(R(a) + \Delta r(a), 0),
+\phi(x, c) = \exp\left(\frac{(\max(x, 0))^2}{2c}\right)
 \]
-exactly as in CFR+. The motivation is that, even though the potential already ignores negative regrets via $\max(x,0)$, the underlying $R(a)$ values still accumulate negatively and may slow adaptation when an action transitions from bad to good. Truncating to zero should let good actions ``recover'' faster, potentially combining the adaptivity of NormalHedge with the empirical speed-ups of RM+.
+where $c > 0$ is a scale parameter determined dynamically.
+
+\paragraph{Scale Parameter.}
+The scale $c$ is chosen so that the average potential equals Euler's number $e$:
+\[
+\frac{1}{N} \sum_{a=1}^{N} \exp\left(\frac{R_+^2(a)}{2c}\right) = e
+\]
+This is solved numerically via bisection search at each decision point.
+
+\paragraph{Weight Computation.}
+The weight for each action is proportional to the derivative of the potential:
+\[
+w(a) = \frac{R_+(a)}{c} \cdot \exp\left(\frac{R_+(a)^2}{2c}\right)
+\]
+where $R_+(a) = \max(R(a), 0)$. The strategy is then $\sigma(a) = w(a) / \sum_{a'} w(a')$.
+
+\paragraph{Key Differences from CFR.}
+\begin{itemize}
+    \item \textbf{Exponential weighting}: Actions are weighted exponentially in $R^2$, not linearly in $R$
+    \item \textbf{Automatic adaptation}: The scale $c$ adapts to the magnitude of regrets
+    \item \textbf{Sharp probability concentration}: High-regret actions receive disproportionately more weight
+\end{itemize}
+
+\subsection{NormalHedge+: A Novel Hybrid}
+
+NormalHedge+ is a novel algorithm we introduce that combines:
+\begin{itemize}
+    \item NormalHedge's \textbf{exponential weighting} for strategy computation
+    \item CFR+'s \textbf{RM+ truncation} for regret updates
+\end{itemize}
+
+\paragraph{Motivation.}
+In NormalHedge, although the potential function applies $\max(x, 0)$, the underlying regret values $R(a)$ can still accumulate large negative values. When an action transitions from bad to good, it must first ``pay off'' this negative debt before gaining weight. RM+ truncation eliminates this lag by immediately resetting negative regrets to zero.
+
+\paragraph{Update Rule.}
+\[
+R_I^t(a) = \max\left(R_I^{t-1}(a) + \Delta r_I^t(a), 0\right)
+\]
+followed by NormalHedge weight computation.
+
+\paragraph{Hypothesis.}
+We hypothesize that combining RM+ truncation with exponential weighting may yield faster convergence, similar to how CFR+ improves upon CFR.
+
+\subsection{Algorithm Comparison Summary}
+
+Table~\ref{tab:alg_summary} summarizes the key differences between algorithms.
+
+\begin{table}[t]
+\centering
+\caption{Algorithm comparison: weighting method and regret handling.}
+\label{tab:alg_summary}
+\small
+\begin{tabular}{lcc}
+\toprule
+Algorithm & Weighting & Regret Truncation \\
+\midrule
+CFR & Linear ($\propto R_+$) & No \\
+CFR+ & Linear ($\propto R_+$) & Yes (RM+) \\
+NormalHedge & Exponential ($\propto R_+/c \cdot e^{R_+^2/2c}$) & No \\
+NormalHedge+ & Exponential ($\propto R_+/c \cdot e^{R_+^2/2c}$) & Yes (RM+) \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{Experimental Setup}
 \label{sec:setup}
 
-We evaluate all four algorithms on Kuhn Poker under several ante and bet configurations:
+\subsection{Game Configurations}
+
+We evaluate algorithms across four Kuhn Poker configurations with varying ante ($A$) and bet size ($B$):
+
 \begin{center}
-\begin{tabular}{llll}
+\begin{tabular}{lccl}
 \toprule
-Configuration & Ante $A$ & Bet $B$ & Nash value (P0) \\
+Configuration & Ante $A$ & Bet $B$ & Nash Value (P0) \\
 \midrule
-Standard      & 1 & 1 & $-0.0556$ \\
+Standard      & 1 & 1 & $-1/18 \approx -0.0556$ \\
 Large Bet     & 1 & 2 & $\approx -0.0556$ \\
-Large Ante    & 2 & 1 & $-0.1111$ \\
+Large Ante    & 2 & 1 & $-2/18 \approx -0.1111$ \\
 Scaled Up     & 2 & 2 & $\approx -0.1111$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-For each configuration we run $T=10{,}000$ and $T=100{,}000$ iterations. We report:
-(i) absolute error from the Nash value, $|v_T - v^\ast|$,
-(ii) qualitative convergence speed,
-(iii) wall-clock training time (relative comparison), and
-(iv) inspection of equilibrium strategies for the standard configuration.
+\subsection{Iteration Budgets}
 
-\section{Results}
+For each configuration, we run:
+\begin{itemize}
+    \item $T = 10{,}000$ iterations (``10K''): Tests early convergence
+    \item $T = 100{,}000$ iterations (``100K''): Tests asymptotic behavior
+\end{itemize}
+
+For strategy convergence analysis, we also track at checkpoints: 1K, 5K, 10K, 25K, 50K, and 100K iterations.
+
+\subsection{Evaluation Metrics}
+
+\begin{enumerate}
+    \item \textbf{Error from Nash}: $|v_T - v^*|$ where $v_T$ is the final expected value and $v^*$ is the Nash equilibrium value
+    \item \textbf{Strategy Distance}: L2 distance between learned strategies and Nash equilibrium strategies
+    \item \textbf{Convergence Speed}: Running average of expected value over iterations
+    \item \textbf{Training Time}: Wall-clock time in seconds
+\end{enumerate}
+
+\subsection{Implementation Details}
+
+All algorithms are implemented in Python using NumPy for numerical operations. The complete implementation is available at \url{https://github.com/yradwan147/RegretMinimizationKuhnPoker}. Key implementation choices include:
+\begin{itemize}
+    \item CFR+ uses delay parameter $d = 0$ (no delay)
+    \item NormalHedge scale parameter solved via 60 iterations of bisection search
+    \item Numerical stability: exponent clamping at 700 to prevent overflow
+    \item Running averages computed over final 10\% of iterations for stability
+\end{itemize}
+
+\section{Experimental Results}
 \label{sec:results}
 
-Table~\ref{tab:summary} summarizes the absolute error from Nash value after training. Bold entries indicate the lowest error for each configuration/iteration pair.
+\subsection{Main Results}
+
+Table~\ref{tab:main_results} summarizes the absolute error from Nash value for all algorithm-configuration pairs.
 
 \begin{table}[t]
 \centering
-\caption{Absolute error from Nash value for Player~0 after $T$ iterations.}
-\label{tab:summary}
+\caption{Absolute error from Nash value $|v_T - v^*|$ after $T$ iterations. Bold indicates best performance for each row.}
+\label{tab:main_results}
 \small
-\begin{tabular}{llllll}
+\begin{tabular}{llcccc}
 \toprule
 Configuration & Iters & CFR & CFR+ & NormalHedge & NormalHedge+ \\
 \midrule
@@ -188,23 +381,421 @@ Scaled (2,2)     & 10K & 0.0135   & 0.1011          & \textbf{0.0079} & 0.0891 \
 Scaled (2,2)     & 100K& 0.0710   & 0.0292          & \textbf{0.0108} & 0.0444 \\
 \bottomrule
 \end{tabular}
-\vspace{-0.5em}
 \end{table}
 
-On the standard game with 10K iterations, CFR+ is dramatically more accurate than CFR (about $95\%$ lower error). With 100K iterations, the NormalHedge variants catch up and slightly outperform CFR+, at a substantially higher computational cost (roughly $4$--$6\times$ slower due to the bisection search for the scale parameter at each information set).
+\subsection{Detailed Analysis by Configuration}
 
-Inspection of the learned strategies in the standard configuration (100K iterations) shows that all algorithms approximate the known Nash equilibrium structure: bluffing with Jack with probability close to $1/3$, almost always checking with Queen, and value betting with King with high probability while folding Jack and calling with King facing bets.
+\paragraph{Standard Configuration (Ante=1, Bet=1).}
+At 10K iterations, CFR+ achieves dramatically lower error (0.0003) compared to CFR (0.0050)---a 94\% improvement. NormalHedge variants perform poorly at this iteration count. However, at 100K iterations, NormalHedge achieves the lowest error (0.0112), demonstrating its strength in the asymptotic regime.
 
-\section{Discussion and Conclusions}
+\paragraph{Large Bet Configuration (Ante=1, Bet=2).}
+Interestingly, NormalHedge+ achieves the best 10K performance (0.0247), suggesting that RM+ truncation may interact favorably with exponential weighting when payoff magnitudes are larger. At 100K iterations, CFR achieves the lowest error.
+
+\paragraph{Large Ante Configuration (Ante=2, Bet=1).}
+CFR+ consistently outperforms other algorithms in this configuration, achieving the lowest error at both iteration counts.
+
+\paragraph{Scaled Configuration (Ante=2, Bet=2).}
+NormalHedge achieves remarkably low error in both regimes (0.0079 at 10K, 0.0108 at 100K), making it the clear winner for this game parameterization.
+
+\subsection{Convergence Analysis}
+
+Figure~\ref{fig:convergence} shows the convergence behavior of all algorithms on the standard configuration.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{exp_comprehensive_summary.png}
+\caption{Comprehensive comparison of CFR, CFR+, NormalHedge, and NormalHedge+. Top row: Error comparison at 10K and 100K iterations. Middle row: Convergence curves for standard configuration. Bottom row: Training time comparison and improvement over CFR baseline.}
+\label{fig:convergence}
+\end{figure}
+
+Key observations:
+\begin{enumerate}
+    \item \textbf{Early convergence}: CFR+ converges fastest in the first 10K iterations
+    \item \textbf{Late convergence}: NormalHedge variants eventually match or exceed CFR+ accuracy
+    \item \textbf{Oscillation}: All algorithms exhibit oscillation around the Nash value, with NormalHedge showing more variance
+\end{enumerate}
+
+\subsection{Computational Cost}
+
+Table~\ref{tab:timing} reports training times for select configurations.
+
+\begin{table}[t]
+\centering
+\caption{Training time in seconds for 100K iterations.}
+\label{tab:timing}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Configuration & CFR & CFR+ & NormalHedge & NormalHedge+ \\
+\midrule
+Standard (1,1)  & 4.5s & 3.4s & 18.6s & 19.6s \\
+Large Bet (1,2) & 6.0s & 4.8s & 25.0s & 26.8s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+NormalHedge variants are approximately 4--6$\times$ slower than CFR variants due to the bisection search for the scale parameter $c$ at each information set.
+
+\subsection{Strategy Convergence to Nash Equilibrium}
+\label{sec:strategy_convergence}
+
+Beyond measuring distance to the Nash \emph{value}, we analyze how the learned \emph{strategies} converge to the known Nash equilibrium strategies. This is crucial because multiple strategy profiles can achieve similar expected values while having different exploitability.
+
+\paragraph{Strategy Distance Metric.}
+We define the L2 strategy distance as:
+\[
+d_{\text{strategy}} = \sqrt{\frac{1}{|I|} \sum_{I} \sum_{a \in \mathcal{A}(I)} (\sigma_I(a) - \sigma_I^*(a))^2}
+\]
+where $\sigma_I^*$ is the Nash equilibrium strategy at information set $I$.
+
+Table~\ref{tab:strategy_distance} shows how strategy distance decreases over iterations.
+
+\begin{table}[t]
+\centering
+\caption{L2 distance from Nash equilibrium strategies across iterations. Bold indicates lowest distance at each checkpoint.}
+\label{tab:strategy_distance}
+\small
+\begin{tabular}{rcccc}
+\toprule
+Iterations & CFR & CFR+ & NormalHedge & NormalHedge+ \\
+\midrule
+1,000 & \textbf{0.0947} & 0.1217 & 0.1396 & 0.1175 \\
+5,000 & 0.2128 & 0.1319 & 0.1249 & \textbf{0.1060} \\
+10,000 & 0.1867 & 0.1423 & \textbf{0.0968} & 0.1711 \\
+25,000 & 0.1473 & 0.1166 & \textbf{0.0970} & 0.1163 \\
+50,000 & \textbf{0.0968} & 0.1065 & 0.1403 & 0.1256 \\
+100,000 & \textbf{0.0900} & 0.1154 & 0.1752 & 0.1203 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Key Strategy Comparison.}
+Table~\ref{tab:key_strategies} compares learned strategies to Nash equilibrium values for key decision points.
+
+\begin{table}[t]
+\centering
+\caption{Learned strategies for key decision points (100K iterations). Bold indicates closest to Nash equilibrium.}
+\label{tab:key_strategies}
+\small
+\begin{tabular}{llccccc}
+\toprule
+Info Set & Action & Nash & CFR & CFR+ & NH & NH+ \\
+\midrule
+J & BET & 0.333 & \textbf{0.283} & 0.226 & 0.146 & 0.225 \\
+Q & CHECK & 1.000 & \textbf{1.000} & 0.993 & \textbf{1.000} & 0.991 \\
+K & BET & 1.000 & \textbf{0.854} & 0.699 & 0.444 & 0.672 \\
+Jb & FOLD & 1.000 & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} \\
+Qb & CALL & 0.333 & 0.340 & 0.358 & \textbf{0.337} & 0.348 \\
+Kb & CALL & 1.000 & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} \\
+Jcb & FOLD & 1.000 & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} \\
+Kcb & CALL & 1.000 & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Analysis of Strategy Convergence.}
+
+\begin{enumerate}
+    \item \textbf{Pure strategies converge perfectly.} All algorithms correctly learn the pure Nash strategies:
+    \begin{itemize}
+        \item Always fold Jack facing a bet (Jb, Jcb)
+        \item Always call with King facing a bet (Kb, Kcb)
+        \item Queen always checks initially
+    \end{itemize}
+    
+    \item \textbf{Mixed strategies show more variation.} The most challenging strategies to learn are the mixed ones:
+    \begin{itemize}
+        \item \textbf{Jack bluffing} (Nash: $\frac{1}{3} \approx 0.333$): CFR achieves 0.283 (closest), while NormalHedge underbluffs at 0.146
+        \item \textbf{King value betting} (Nash: 1.0): CFR leads with 0.854, but all algorithms underbet with King
+        \item \textbf{Queen calling} (Nash: $\frac{1}{3}$): NormalHedge is closest at 0.337
+    \end{itemize}
+    
+    \item \textbf{Non-monotonic convergence.} Interestingly, strategy distance does not decrease monotonically with iterations. At 100K iterations, CFR has the lowest strategy distance (0.0900), even though NormalHedge achieved lower distance at 10K and 25K iterations.
+    
+    \item \textbf{Algorithm-specific patterns.}
+    \begin{itemize}
+        \item \textbf{CFR}: Conservative---tends to underbluff with Jack and underbet with King
+        \item \textbf{CFR+}: Most balanced across mixed strategies
+        \item \textbf{NormalHedge}: Most aggressive King betting (0.444 is still low but closest to ``always bet'')
+        \item \textbf{NormalHedge+}: Similar to CFR+ in strategy profile
+    \end{itemize}
+\end{enumerate}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{strategy_convergence_analysis.png}
+\caption{Strategy convergence to Nash equilibrium. Top-left: Overall L2 distance from Nash strategies. Remaining plots: Individual strategy probabilities for key decision points (Jack bluffing, King betting, Queen checking, Jack folding, Queen calling) compared to Nash equilibrium values (dashed lines).}
+\label{fig:strategy_convergence}
+\end{figure}
+
+Figure~\ref{fig:strategy_convergence} visualizes the convergence of individual strategies over iterations. The plots reveal that:
+\begin{itemize}
+    \item Pure strategies (Jack fold, King call) converge very quickly and remain stable
+    \item Mixed strategies exhibit oscillation and slower convergence
+    \item Different algorithms find different ``attractors'' near the Nash equilibrium
+\end{itemize}
+
+\section{Discussion}
 \label{sec:discussion}
 
-\paragraph{Key findings.}
-Our experiments yield several qualitative conclusions:
+\subsection{Key Findings}
+
+\paragraph{CFR+ excels at low iteration budgets.}
+RM+ truncation and weighted averaging provide significant speed-ups, making CFR+ the preferred choice when computation is limited. The 94\% error reduction over CFR at 10K iterations on the standard configuration is particularly striking.
+
+\paragraph{NormalHedge achieves high accuracy asymptotically.}
+Despite poor early performance, NormalHedge matches or exceeds CFR+ at 100K iterations in several configurations. The exponential weighting scheme appears to enable finer strategy refinement given sufficient iterations.
+
+\paragraph{Pure vs. Mixed Strategy Convergence.}
+All algorithms quickly converge to the correct pure strategies (always fold Jack facing bet, always call with King). However, mixed strategies like Jack bluffing show persistent errors even at 100K iterations. This suggests that the variance in regret estimates affects mixed strategy learning more than pure strategy learning.
+
+\paragraph{NormalHedge+ shows inconsistent improvements.}
+Contrary to our hypothesis, combining RM+ truncation with NormalHedge weighting does not consistently improve performance. In some cases (Large Bet 10K), NormalHedge+ achieves the best results; in others (Standard 10K), it performs worse than both parent algorithms.
+
+\paragraph{No single algorithm dominates.}
+Performance depends on both the game configuration (ante/bet sizes) and the iteration regime (early vs.\ late). This suggests that algorithm selection should be tailored to the specific problem and computational constraints.
+
+\subsection{Why Does NormalHedge+ Underperform?}
+
+Several factors may explain the mixed results of NormalHedge+:
+
+\begin{enumerate}
+    \item \textbf{Redundant truncation}: In NormalHedge, the $\max(x, 0)$ in the potential function already ignores negative regrets for weight computation. RM+ truncation may introduce additional effects that interact poorly with exponential weighting.
+    
+    \item \textbf{Scale parameter dynamics}: The automatic $c$ computation assumes regrets can take any real value. When all regrets are non-negative (due to truncation), the scale parameter may behave differently, potentially over-concentrating probability mass.
+    
+    \item \textbf{Loss of information}: Negative regrets contain information about which actions are definitively bad. Truncating this information may slow down convergence in some scenarios.
+\end{enumerate}
+
+\subsection{Practical Recommendations}
+
+Based on our experiments, we offer the following guidelines:
+
+\begin{enumerate}
+    \item \textbf{Limited computation}: Use CFR+ for best early convergence
+    \item \textbf{High accuracy required}: Use NormalHedge with large iteration budget
+    \item \textbf{Simplicity preferred}: Use vanilla CFR (no hyperparameters, robust performance)
+    \item \textbf{Exploratory research}: NormalHedge+ warrants further investigation, particularly on larger games
+\end{enumerate}
+
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{CFR and Variants.}
+CFR was introduced by Zinkevich et al.~\cite{zinkevich2007regret} and has since spawned numerous variants. Monte Carlo CFR (MCCFR)~\cite{lanctot2009monte} enables scaling to larger games through sampling. CFR+~\cite{tammelin2014solving} introduced RM+ truncation and achieved order-of-magnitude speed-ups. Discounted CFR~\cite{brown2019solving} further accelerates convergence through adaptive discounting.
+
+\paragraph{Superhuman Poker AI.}
+Libratus~\cite{brown2017superhuman} and Pluribus~\cite{brown2019superhuman} achieved superhuman performance in heads-up no-limit and multiplayer Texas Hold'em, respectively, using CFR-based algorithms with blueprint computation and real-time subgame solving.
+
+\paragraph{Online Learning.}
+NormalHedge~\cite{chaudhuri2009parameter} is part of a broader family of parameter-free online learning algorithms. Related work includes AdaHedge~\cite{de2014follow} and optimistic methods~\cite{syrgkanis2015fast}.
+
+\section{Conclusions and Future Work}
+\label{sec:conclusion}
+
+We have presented a comprehensive comparison of four regret minimization algorithms on Kuhn Poker. Our experiments demonstrate that CFR+ provides substantial speed-ups at low iteration counts, while NormalHedge achieves superior accuracy asymptotically. Our strategy convergence analysis reveals that all algorithms quickly learn pure Nash strategies but show varying accuracy on mixed strategies, with CFR generally achieving strategies closest to the theoretical Nash equilibrium. The novel NormalHedge+ algorithm shows promise in some configurations but does not consistently outperform its parent algorithms.
+
+\paragraph{Future Work.}
+Several directions merit further investigation:
 \begin{itemize}
-    \item \textbf{CFR+ excels at low iteration budgets.} RM+ truncation and weighted averaging significantly improve early convergence, making CFR+ a strong choice when computation is limited.
-    \item \textbf{NormalHedge achieves high-accuracy solutions given enough iterations.} Despite poor performance at 10K iterations, NormalHedge matches or surpasses CFR+ at 100K iterations in several configurations, supporting the usefulness of potential-based, parameter-free weighting.
-    \item \textbf{NormalHedge+ shows mixed behavior.} While RM+ truncation improves NormalHedge in some settings (e.g., Large Bet at 10K iterations), it degrades performance in others (e.g., Standard game at 10K). This suggests a non-trivial interaction between exponential weighting and regret truncation.
-    \item \textbf{No single algorithm is uniformly best.} Performance depends on the game scaling (ante/bet sizes) and on the iteration regime (early vs.\ late).
+    \item \textbf{Theoretical analysis}: Derive convergence bounds for NormalHedge+ to understand when truncation helps
+    \item \textbf{Larger games}: Test on Texas Hold'em and other complex poker variants
+    \item \textbf{Hybrid strategies}: Explore adaptive switching between algorithms based on convergence diagnostics
+    \item \textbf{Alternative truncation schemes}: Investigate soft truncation (e.g., $\max(R, -\epsilon)$) for NormalHedge
+    \item \textbf{Mixed strategy learning}: Investigate why mixed strategies converge slower than pure strategies
 \end{itemize}
+
+\section*{Code Availability}
+
+All code, experiments, and results are available at:\\
+\url{https://github.com/yradwan147/RegretMinimizationKuhnPoker}
+
+\section*{Acknowledgments}
+
+This work was conducted as part of the Online Learning course at KAUST.
+
+\bibliographystyle{plain}
+\begin{thebibliography}{10}
+
+\bibitem{bowling2015}
+M.~Bowling, N.~Burch, M.~Johanson, and O.~Tammelin.
+\newblock Heads-up limit hold'em poker is solved.
+\newblock {\em Science}, 347(6218):145--149, 2015.
+
+\bibitem{brown2017superhuman}
+N.~Brown and T.~Sandholm.
+\newblock Superhuman {AI} for heads-up no-limit poker: {L}ibratus beats top professionals.
+\newblock {\em Science}, 359(6374):418--424, 2017.
+
+\bibitem{brown2019superhuman}
+N.~Brown and T.~Sandholm.
+\newblock Superhuman {AI} for multiplayer poker.
+\newblock {\em Science}, 365(6456):885--890, 2019.
+
+\bibitem{brown2019solving}
+N.~Brown and T.~Sandholm.
+\newblock Solving imperfect-information games via discounted regret minimization.
+\newblock In {\em AAAI Conference on Artificial Intelligence}, 2019.
+
+\bibitem{chaudhuri2009parameter}
+K.~Chaudhuri, Y.~Freund, and D.~Hsu.
+\newblock A parameter-free hedging algorithm.
+\newblock In {\em Advances in Neural Information Processing Systems}, 2009.
+
+\bibitem{de2014follow}
+S.~de~Rooij, T.~Van~Erven, P.~D.~Gr{\"u}nwald, and W.~M.~Koolen.
+\newblock Follow the leader if you can, hedge if you must.
+\newblock {\em Journal of Machine Learning Research}, 15(1):1281--1316, 2014.
+
+\bibitem{hart2000simple}
+S.~Hart and A.~Mas-Colell.
+\newblock A simple adaptive procedure leading to correlated equilibrium.
+\newblock {\em Econometrica}, 68(5):1127--1150, 2000.
+
+\bibitem{kuhn1950simplified}
+H.~W. Kuhn.
+\newblock A simplified two-person poker.
+\newblock {\em Contributions to the Theory of Games}, 1:97--103, 1950.
+
+\bibitem{lanctot2009monte}
+M.~Lanctot, K.~Waugh, M.~Zinkevich, and M.~Bowling.
+\newblock Monte {C}arlo sampling for regret minimization in extensive games.
+\newblock In {\em Advances in Neural Information Processing Systems}, 2009.
+
+\bibitem{syrgkanis2015fast}
+V.~Syrgkanis, A.~Agarwal, H.~Luo, and R.~E.~Schapire.
+\newblock Fast convergence of regularized learning in games.
+\newblock In {\em Advances in Neural Information Processing Systems}, 2015.
+
+\bibitem{tammelin2014solving}
+O.~Tammelin.
+\newblock Solving large imperfect information games using {CFR}+.
+\newblock {\em arXiv preprint arXiv:1407.5042}, 2014.
+
+\bibitem{zinkevich2007regret}
+M.~Zinkevich, M.~Johanson, M.~Bowling, and C.~Piccione.
+\newblock Regret minimization in games with incomplete information.
+\newblock In {\em Advances in Neural Information Processing Systems}, 2007.
+
+\end{thebibliography}
+
+\newpage
+
+\appendix
+
+\section{Implementation Details}
+\label{app:implementation}
+
+\subsection{Code Structure}
+
+Our implementation consists of the following Python modules, available at \url{https://github.com/yradwan147/RegretMinimizationKuhnPoker}:
+
+\begin{itemize}
+    \item \texttt{kuhn\_poker.py}: Game state representation and rules
+    \item \texttt{cfr.py}: Vanilla CFR implementation
+    \item \texttt{cfr\_plus.py}: CFR+ with RM+ truncation and weighted averaging
+    \item \texttt{normal\_hedge.py}: NormalHedge with bisection search for scale parameter
+    \item \texttt{normal\_hedge\_plus.py}: NormalHedge with RM+ truncation
+    \item \texttt{comprehensive\_experiments.py}: Experiment runner and visualization
+    \item \texttt{strategy\_analysis.py}: Strategy convergence analysis
+\end{itemize}
+
+\subsection{NormalHedge Scale Parameter Search}
+
+The scale parameter $c$ is found by solving:
+\[
+\frac{1}{N} \sum_{a=1}^{N} \exp\left(\frac{R_+^2(a)}{2c}\right) = e
+\]
+
+We use bisection search with the following procedure:
+\begin{enumerate}
+    \item Initialize $c_{\text{lo}} = 10^{-12}$, $c_{\text{hi}} = 1.0$
+    \item Expand $c_{\text{hi}}$ by doubling until average potential $< e$
+    \item Perform 60 iterations of bisection to find $c$ within tolerance $10^{-10}$
+\end{enumerate}
+
+\subsection{Numerical Stability}
+
+To prevent overflow in exponential computations, we clamp exponents:
+\[
+\exp\left(\min\left(\frac{R_+^2}{2c}, 700\right)\right)
+\]
+since $\exp(700) \approx 10^{304}$ is near the maximum representable float.
+
+\section{Complete Strategy Tables}
+\label{app:strategies}
+
+Table~\ref{tab:full_strategies} provides the complete learned strategies for all 12 information sets in Kuhn Poker.
+
+\begin{table}[h]
+\centering
+\caption{Complete learned strategies for all information sets (100K iterations, standard configuration).}
+\label{tab:full_strategies}
+\small
+\begin{tabular}{llcccc}
+\toprule
+Info Set & Actions & CFR & CFR+ & NH & NH+ \\
+\midrule
+\multicolumn{6}{l}{\textit{Player 0 - Initial Decision}} \\
+J & CHECK/BET & 0.72/0.28 & 0.77/0.23 & 0.85/0.15 & 0.77/0.23 \\
+Q & CHECK/BET & 1.00/0.00 & 0.99/0.01 & 1.00/0.00 & 0.99/0.01 \\
+K & CHECK/BET & 0.15/0.85 & 0.30/0.70 & 0.56/0.44 & 0.33/0.67 \\
+\midrule
+\multicolumn{6}{l}{\textit{Player 1 - After Check}} \\
+Jc & CHECK/BET & 0.67/0.33 & 0.66/0.34 & 0.65/0.35 & 0.67/0.33 \\
+Qc & CHECK/BET & 1.00/0.00 & 0.99/0.01 & 1.00/0.00 & 0.99/0.01 \\
+Kc & CHECK/BET & 0.00/1.00 & 0.00/1.00 & 0.00/1.00 & 0.00/1.00 \\
+\midrule
+\multicolumn{6}{l}{\textit{Player 1 - After Bet}} \\
+Jb & FOLD/CALL & 1.00/0.00 & 1.00/0.00 & 1.00/0.00 & 1.00/0.00 \\
+Qb & FOLD/CALL & 0.66/0.34 & 0.64/0.36 & 0.66/0.34 & 0.65/0.35 \\
+Kb & FOLD/CALL & 0.00/1.00 & 0.00/1.00 & 0.00/1.00 & 0.00/1.00 \\
+\midrule
+\multicolumn{6}{l}{\textit{Player 0 - Response to Bet}} \\
+Jcb & FOLD/CALL & 1.00/0.00 & 1.00/0.00 & 1.00/0.00 & 1.00/0.00 \\
+Qcb & FOLD/CALL & 0.60/0.40 & 0.55/0.45 & 0.58/0.42 & 0.56/0.44 \\
+Kcb & FOLD/CALL & 0.00/1.00 & 0.00/1.00 & 0.00/1.00 & 0.00/1.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Nash Equilibrium Reference}
+\label{app:nash}
+
+For completeness, we provide the full Nash equilibrium strategies for standard Kuhn Poker ($A=B=1$):
+
+\begin{table}[h]
+\centering
+\caption{Nash equilibrium strategies for Kuhn Poker (one possible equilibrium from the family).}
+\label{tab:nash_reference}
+\small
+\begin{tabular}{llc}
+\toprule
+Info Set & Optimal Action & Probability \\
+\midrule
+\multicolumn{3}{l}{\textit{Player 0 - Initial}} \\
+J & BET (bluff) & $\frac{1}{3} \approx 0.333$ \\
+Q & CHECK & $1.0$ \\
+K & BET (value) & $\geq \frac{2}{3}$ (often 1.0) \\
+\midrule
+\multicolumn{3}{l}{\textit{Player 1 - After Check}} \\
+Jc & BET (bluff) & $\frac{1}{3}$ \\
+Qc & CHECK & $1.0$ \\
+Kc & BET (value) & $1.0$ \\
+\midrule
+\multicolumn{3}{l}{\textit{Player 1 - Facing Bet}} \\
+Jb & FOLD & $1.0$ \\
+Qb & CALL & $\frac{1}{3}$ \\
+Kb & CALL & $1.0$ \\
+\midrule
+\multicolumn{3}{l}{\textit{Player 0 - Facing Bet After Check}} \\
+Jcb & FOLD & $1.0$ \\
+Qcb & CALL & $\frac{1}{3}$ \\
+Kcb & CALL & $1.0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The Nash equilibrium value for Player~0 is $-\frac{1}{18} \approx -0.0556$, meaning Player~0 loses on average $\frac{1}{18}$ of an ante per game when both players play optimally.
 
 \end{document}

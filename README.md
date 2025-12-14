@@ -1,28 +1,50 @@
-# Counterfactual Regret Minimization for Kuhn Poker
+# Regret Minimization Algorithms for Kuhn Poker
 
-A tree-based implementation of Counterfactual Regret Minimization (CFR) applied to Kuhn Poker, designed for easy experimentation with game rules and algorithm parameters.
+A comprehensive implementation and comparison of four regret minimization algorithms applied to Kuhn Poker, a minimal yet strategically rich imperfect-information game.
 
-## Overview
+## 🎯 Overview
 
-This implementation provides:
-- **Tree-based CFR**: Clean game tree structure for transparent game logic
-- **Configurable rules**: Easy modification of antes, bet sizes, and game mechanics
-- **Strategy visualization**: Clear output of learned strategies
-- **Convergence analysis**: Plots showing algorithm convergence to Nash equilibrium
+This project implements and compares:
 
-## Project Structure
+| Algorithm | Description | Key Feature |
+|-----------|-------------|-------------|
+| **CFR** | Counterfactual Regret Minimization | Foundational algorithm, O(1/√T) convergence |
+| **CFR+** | CFR with Regret Matching+ | RM+ truncation, O(1/T) convergence |
+| **NormalHedge** | Parameter-free potential-based method | Exponential weighting, automatic adaptation |
+| **NormalHedge+** | Novel hybrid (our contribution) | Combines NormalHedge + RM+ truncation |
+
+### Key Features
+
+- 🎮 **Tree-based game implementation**: Clean, extensible Kuhn Poker engine
+- 🔬 **Four algorithm implementations**: CFR, CFR+, NormalHedge, NormalHedge+
+- 📊 **Comprehensive experiments**: Multiple game configurations and iteration budgets
+- 📈 **Strategy convergence analysis**: Compare learned strategies to Nash equilibrium
+- 📄 **Full academic report**: NeurIPS-format LaTeX document with detailed analysis
+
+## 📁 Project Structure
 
 ```
 .
-├── kuhn_poker.py    # Game implementation (rules, states, actions)
-├── cfr.py           # CFR algorithm implementation
-├── main.py          # Main script with visualization
-└── README.md        # This file
+├── kuhn_poker.py                    # Game implementation (rules, states, actions)
+├── cfr.py                           # CFR algorithm implementation
+├── cfr_plus.py                      # CFR+ algorithm implementation
+├── normal_hedge.py                  # NormalHedge algorithm implementation
+├── normal_hedge_plus.py             # NormalHedge+ algorithm implementation
+├── main.py                          # Basic CFR demo script
+├── compare_cfr_variants.py          # Compare CFR vs CFR+
+├── comprehensive_experiments.py     # Full experimental suite (all 4 algorithms)
+├── strategy_analysis.py             # Strategy convergence analysis
+├── quick_compare.py                 # Fast comparison script
+├── interactive_play.py              # Play against trained AI
+├── finalreport.tex                  # Full academic report (NeurIPS format)
+├── requirements.txt                 # Python dependencies
+└── README.md                        # This file
 ```
 
-## Kuhn Poker Rules
+## 🃏 Kuhn Poker
 
-Kuhn Poker is a simplified poker game with:
+Kuhn Poker is the simplest poker variant that retains essential strategic elements:
+
 - **Players**: 2
 - **Deck**: 3 cards (Jack < Queen < King)
 - **Ante**: Each player puts 1 chip in the pot
@@ -30,215 +52,255 @@ Kuhn Poker is a simplified poker game with:
 
 ### Game Flow
 
-1. Each player is dealt one card (one card unused)
-2. **Player 0** acts first:
-   - **Check**: Pass action to Player 1
-   - **Bet**: Put 1 chip in pot
-3. **Player 1** responds:
-   - If Player 0 checked: Can check (showdown) or bet
-   - If Player 0 bet: Can fold (lose ante) or call (showdown)
-4. If Player 1 bets after Player 0 checks, Player 0 can fold or call
-5. **Showdown**: Highest card wins the pot
+```
+1. Deal cards → Player 0 gets one, Player 1 gets one
+2. Player 0: CHECK or BET
+3. Player 1: 
+   - After CHECK: CHECK (showdown) or BET
+   - After BET: FOLD or CALL (showdown)
+4. If Player 1 bets after check: Player 0 can FOLD or CALL
+5. Showdown: Higher card wins
+```
 
-## CFR Algorithm
+### Nash Equilibrium
 
-Counterfactual Regret Minimization learns optimal strategies by:
-1. Simulating many game iterations
-2. Tracking "regret" for not taking each action
-3. Updating strategy to prefer actions with high regret
-4. Converging to Nash equilibrium
+- **Expected value**: -1/18 ≈ -0.0556 for Player 0
+- **Jack bluffing**: Bet with probability 1/3
+- **Queen**: Always check
+- **King**: Bet with probability ≥ 2/3
 
-### Key Components
+## 🚀 Quick Start
 
-- **Information Sets**: Represent what a player knows (their card + history)
-- **Regret Matching**: Update strategy based on cumulative regrets
-- **Reach Probabilities**: Track how likely each state is to be reached
+### Installation
 
-## Usage
+```bash
+pip install -r requirements.txt
+```
 
-### Basic Usage
+### Run Comprehensive Experiments
+
+```bash
+python comprehensive_experiments.py
+```
+
+This runs all four algorithms across multiple configurations and generates:
+- Convergence plots
+- Error comparison charts
+- Training time analysis
+- Comprehensive summary figure
+
+### Run Strategy Convergence Analysis
+
+```bash
+python strategy_analysis.py
+```
+
+Analyzes how learned strategies converge to Nash equilibrium across iterations.
+
+### Quick Comparison
+
+```bash
+python quick_compare.py
+```
+
+Fast comparison with fewer iterations for testing.
+
+## 📊 Algorithms
+
+### CFR (Counterfactual Regret Minimization)
+
+The foundational algorithm for solving imperfect-information games.
 
 ```python
-from kuhn_poker import GameConfig
 from cfr import CFRTrainer
+from kuhn_poker import GameConfig
 
-# Create configuration
 config = GameConfig(ante=1, bet_size=1)
-
-# Initialize trainer
 trainer = CFRTrainer(config)
-
-# Train for 10,000 iterations
-expected_values = trainer.train(10000)
-
-# Get learned strategies
+values = trainer.train(10000)
 strategies = trainer.get_strategy_profile()
 ```
 
-### Running the Complete Analysis
+**Key equations:**
+- Strategy: σ(a) = R⁺(a) / Σ R⁺(a')
+- Regret update: R(a) = R(a) + π₋ᵢ × (v(a) - v̄)
+- Convergence: O(1/√T)
 
-```bash
-python main.py
+### CFR+ (CFR with Regret Matching+)
+
+Improved variant with faster convergence.
+
+```python
+from cfr_plus import CFRPlusTrainer
+
+trainer = CFRPlusTrainer(config, delay=0)
+values = trainer.train(10000)
 ```
 
-This will:
-1. Train CFR for 10,000 iterations
-2. Print the learned strategy profile
-3. Display strategy analysis
-4. Save results to `cfr_results.json`
-5. Generate convergence plots (`cfr_convergence.png`)
+**Key improvements:**
+- **RM+ truncation**: R(a) = max(R(a) + Δr, 0) — regrets never go negative
+- **Weighted averaging**: Later strategies get more weight
+- **Alternating updates**: Update one player per iteration
+- **Convergence**: O(1/T)
 
-## Configuration Options
+### NormalHedge
+
+Parameter-free algorithm using half-normal potential.
+
+```python
+from normal_hedge import NormalHedgeTrainer
+
+trainer = NormalHedgeTrainer(config)
+values = trainer.train(10000)
+```
+
+**Key features:**
+- **Potential function**: φ(x,c) = exp(max(x,0)² / 2c)
+- **Automatic scale**: c chosen so average potential = e
+- **Exponential weighting**: w(a) = (R⁺/c) × exp(R⁺²/2c)
+
+### NormalHedge+ (Novel)
+
+Our hybrid combining NormalHedge with RM+ truncation.
+
+```python
+from normal_hedge_plus import NormalHedgePlusTrainer
+
+trainer = NormalHedgePlusTrainer(config)
+values = trainer.train(10000)
+```
+
+**Motivation**: Combine the best of both worlds—exponential weighting for sharp strategy updates, RM+ truncation for faster recovery.
+
+## 📈 Experimental Results
+
+### Error from Nash Equilibrium
+
+| Configuration | Iters | CFR | CFR+ | NormalHedge | NormalHedge+ |
+|---------------|-------|-----|------|-------------|--------------|
+| Standard (1,1) | 10K | 0.0050 | **0.0003** | 0.0388 | 0.0615 |
+| Standard (1,1) | 100K | 0.0185 | 0.0122 | **0.0112** | 0.0123 |
+| Large Bet (1,2) | 10K | 0.0525 | 0.1266 | 0.0446 | **0.0247** |
+| Scaled (2,2) | 100K | 0.0710 | 0.0292 | **0.0108** | 0.0444 |
+
+### Key Findings
+
+1. **CFR+ excels at low iterations** — 94% error reduction over CFR at 10K iterations
+2. **NormalHedge wins asymptotically** — Best accuracy at 100K iterations
+3. **Pure strategies converge fast** — All algorithms quickly learn "always fold Jack facing bet"
+4. **Mixed strategies are harder** — Jack bluffing (Nash: 1/3) shows persistent errors
+
+### Strategy Convergence
+
+| Info Set | Action | Nash | CFR | CFR+ | NH | NH+ |
+|----------|--------|------|-----|------|-----|-----|
+| J | BET | 0.333 | **0.283** | 0.226 | 0.146 | 0.225 |
+| Q | CHECK | 1.000 | **1.000** | 0.993 | **1.000** | 0.991 |
+| K | BET | 1.000 | **0.854** | 0.699 | 0.444 | 0.672 |
+| Jb | FOLD | 1.000 | **1.000** | **1.000** | **1.000** | **1.000** |
+| Kb | CALL | 1.000 | **1.000** | **1.000** | **1.000** | **1.000** |
+
+## 🎮 Interactive Play
+
+Play against a trained AI:
+
+```bash
+python interactive_play.py
+```
+
+## 📄 Academic Report
+
+A comprehensive NeurIPS-format report is included:
+
+```bash
+# Compile the LaTeX report
+pdflatex finalreport.tex
+```
+
+The report includes:
+- Detailed algorithm descriptions with pseudocode
+- Theoretical background on regret minimization
+- Comprehensive experimental results
+- Strategy convergence analysis
+- Discussion and future work
+
+## 🔧 Configuration Options
 
 ### Game Configuration
 
-Modify game rules in `kuhn_poker.py`:
-
 ```python
-class GameConfig:
-    def __init__(self, ante: int = 1, bet_size: int = 1):
-        self.ante = ante          # Initial ante amount
-        self.bet_size = bet_size  # Size of bets
-        self.cards = [Card.JACK, Card.QUEEN, Card.KING]
+from kuhn_poker import GameConfig
+
+# Standard game
+config = GameConfig(ante=1, bet_size=1)
+
+# Large bet
+config = GameConfig(ante=1, bet_size=2)
+
+# Large ante
+config = GameConfig(ante=2, bet_size=1)
+
+# Scaled up
+config = GameConfig(ante=2, bet_size=2)
 ```
 
 ### Training Configuration
 
-Modify training parameters in `main.py`:
-
 ```python
-config = GameConfig(ante=1, bet_size=1)
-num_iterations = 10000  # More iterations = better convergence
+# CFR+ with delay parameter
+trainer = CFRPlusTrainer(config, delay=100)
+
+# More iterations for better convergence
+values = trainer.train(100000)
 ```
 
-## Example Output
+## 📊 Generated Plots
 
-### Learned Strategies
+The experiments generate several visualization files:
 
-```
-PLAYER 0 STRATEGIES:
-  Card: J
-    History: (start)
-      BET: 0.0000
-      CHECK: 1.0000
+| File | Description |
+|------|-------------|
+| `exp_comprehensive_summary.png` | 6-panel summary of all experiments |
+| `strategy_convergence_analysis.png` | Strategy convergence to Nash equilibrium |
+| `exp_convergence_std_100k.png` | Convergence curves (standard config) |
+| `exp_error_comparison.png` | Error comparison bar chart |
+| `exp_timing_comparison.png` | Training time comparison |
 
-  Card: K
-    History: (start)
-      BET: 1.0000
-      CHECK: 0.0000
-```
+## 📚 References
 
-This shows that Player 0:
-- Always checks with Jack (weakest card)
-- Always bets with King (strongest card)
+1. **Zinkevich et al. (2007)**: "Regret Minimization in Games with Incomplete Information" — CFR
+2. **Tammelin (2014)**: "Solving Large Imperfect Information Games Using CFR+" — CFR+
+3. **Chaudhuri, Freund, Hsu (2009)**: "A Parameter-free Hedging Algorithm" — NormalHedge
+4. **Kuhn (1950)**: "A Simplified Two-Person Poker"
+5. **Brown & Sandholm (2019)**: "Superhuman AI for Multiplayer Poker" — Pluribus
 
-### Convergence
+## 🔬 Future Work
 
-The algorithm converges to the theoretical Nash equilibrium value of **-1/18 ≈ -0.0556** (slight disadvantage for the first player).
+- **Larger games**: Test on Texas Hold'em
+- **Monte Carlo variants**: Implement MCCFR for scaling
+- **Deep learning**: Combine with neural networks (Deep CFR)
+- **Theoretical analysis**: Derive convergence bounds for NormalHedge+
 
-## Modifying Game Rules
+## 📝 Citation
 
-### Example 1: Change Bet Size
+If you use this code in your research, please cite:
 
-```python
-# In main.py
-config = GameConfig(ante=1, bet_size=2)  # Larger bets
-```
-
-### Example 2: Add More Cards
-
-```python
-# In kuhn_poker.py
-class GameConfig:
-    def __init__(self):
-        self.ante = 1
-        self.bet_size = 1
-        self.cards = [Card.JACK, Card.QUEEN, Card.KING, Card.ACE]
+```bibtex
+@misc{radwan2024regret,
+  author = {Radwan, Yousef},
+  title = {Regret Minimization Algorithms for Kuhn Poker},
+  year = {2024},
+  publisher = {GitHub},
+  url = {https://github.com/yradwan147/RegretMinimizationKuhnPoker}
+}
 ```
 
-### Example 3: Modify Action Space
-
-You can extend `kuhn_poker.py` to add:
-- Multiple bet sizes
-- Raise actions
-- More betting rounds
-
-The tree-based structure makes it easy to add new actions and game states.
-
-## Understanding the Output
-
-### Strategy Profile
-- Each information set shows probabilities for each action
-- Sum of probabilities = 1.0 for each information set
-- Patterns emerge (e.g., always bet with strong cards)
-
-### Convergence Plots
-- **Top plot**: Shows per-iteration variance and moving average
-- **Bottom plot**: Shows cumulative average converging to Nash value
-- Red dashed line: Theoretical optimal value (-1/18)
-
-## Dependencies
-
-```bash
-pip install numpy matplotlib
-```
-
-## Advanced Usage
-
-### Custom Strategy Evaluation
-
-```python
-# Evaluate a specific strategy
-trainer = CFRTrainer(config)
-trainer.train(10000)
-
-# Access information sets directly
-for info_set_key, info_set in trainer.info_sets.items():
-    avg_strategy = info_set.get_average_strategy()
-    print(f"{info_set_key}: {avg_strategy}")
-```
-
-### Comparing Different Configurations
-
-```python
-configs = [
-    GameConfig(ante=1, bet_size=1),
-    GameConfig(ante=1, bet_size=2),
-    GameConfig(ante=2, bet_size=1),
-]
-
-for config in configs:
-    trainer = CFRTrainer(config)
-    values = trainer.train(10000)
-    print(f"Config {config.ante}/{config.bet_size}: {np.mean(values[-1000:])}")
-```
-
-## Theoretical Background
-
-### Nash Equilibrium
-Kuhn Poker has a known Nash equilibrium where:
-- Expected value: -1/18 for Player 0
-- Player 0 should bet with K, check with J, and mix with Q
-- Player 1 has corresponding optimal responses
-
-### CFR Convergence
-CFR's average strategy converges to Nash equilibrium at a rate of O(1/√T), where T is the number of iterations.
-
-## Future Extensions
-
-Possible modifications:
-1. **Multi-round betting**: Allow multiple bet/raise sequences
-2. **More players**: Extend to 3+ players
-3. **Larger deck**: Use standard 52-card deck with hand rankings
-4. **Alternative algorithms**: Implement CFR+, MCCFR, or Deep CFR
-5. **External sampling**: More efficient variant of CFR
-
-## References
-
-- Zinkevich et al. (2007): "Regret Minimization in Games with Incomplete Information"
-- Kuhn (1950): "A Simplified Two-Person Poker"
-
-## License
+## 📄 License
 
 MIT License - Free to use and modify for research and education.
 
+## 👤 Author
+
+**Yousef Radwan**  
+King Abdullah University of Science and Technology (KAUST)  
+yousef.radwan@kaust.edu.sa
